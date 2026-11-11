@@ -3,8 +3,66 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import ScentCertificateModal from '../components/ScentCertificateModal';
 import AudiobookPlayerModal from '../components/AudiobookPlayerModal';
+import SettingsModal from '../components/SettingsModal';
+import happyLettersData from '../data/happyLetters.json';
 import { db } from '../firebase';
 import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
+
+const HAPPY_PRIMERS_API_URL =
+  'https://firestore.googleapis.com/v1/projects/dmdg-live/databases/(default)/documents/primers?pageSize=100';
+
+const toneEmotionMap = {
+  solemn: '위로',
+  warm: '설렘',
+  poetic: '평온',
+};
+
+function cleanHappyContent(rawText = '') {
+  return String(rawText)
+    .replace(/\u00a0/g, ' ')
+    .replace(/^행복한 세상을 실현하는 NGO\.\s*행복한가\s*/m, '')
+    .replace(/([가-힣])([0-9])/g, '$1 $2')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+async function fetchHappyLettersLive() {
+  const fallbackList = Array.isArray(happyLettersData) ? happyLettersData : [];
+  try {
+    const res = await fetch(HAPPY_PRIMERS_API_URL);
+    if (!res.ok) return fallbackList;
+    const json = await res.json();
+    const docs = Array.isArray(json.documents) ? json.documents : [];
+    const liveList = docs
+      .map((doc, idx) => {
+        const fields = doc.fields || {};
+        const title = fields.title?.stringValue?.trim();
+        const content = cleanHappyContent(fields.content?.stringValue || '');
+        const emotion = fields.emotion?.stringValue?.trim() || '위로';
+        if (!title || !content) return null;
+        return {
+          id: doc.name?.split('/').pop() || `firestore-${idx}`,
+          title,
+          content,
+          emotion,
+          source: '행복한가 (m-letter.or.kr)',
+          url: fields.url?.stringValue?.trim() || 'https://m-letter.or.kr/happy-contents/',
+        };
+      })
+      .filter(Boolean);
+
+    const mergedMap = new Map();
+    [...liveList, ...fallbackList].forEach((item) => {
+      if (item && item.title && !mergedMap.has(item.title)) {
+        mergedMap.set(item.title, item);
+      }
+    });
+    return mergedMap.size > 0 ? Array.from(mergedMap.values()) : fallbackList;
+  } catch (err) {
+    console.warn('행복한가 실시간 API 조회 실패, 내장 원문 데이터로 전환합니다:', err);
+    return fallbackList;
+  }
+}
 
 // Fallback Local Readings (API 실패 시에도 새글이 갱신되도록 3개 이상씩 다채롭게 구성)
 const localReadingsPool = {
@@ -56,11 +114,16 @@ const localReadingsPool = {
     "poetic": [
       "시린 달빛이 켜지는 고요한 겨울밤의 연못가, 얼어붙은 나뭇가지 끝에 목소리로 하얀 눈꽃송이를 피웁니다. 비극의 서막 끝에 마침내 마주하는 침묵의 순간, 아름답고 슬픈 향기를 남긴 채 별빛 속으로 날아오릅니다.",
       "겨울 처마 끝에 매달린 고드름 사이로 차가운 별빛이 쏟아져 내립니다. 허공에 흘러가는 가녀린 연기처럼 스러져간 아름답고 슬픈 기억들을 찾아, 조심스레 떨리는 목소리로 은빛 시를 써 봅니다.",
-      "눈 내리는 밤의 고요함 속에 울려 펴지는 나지막한 고백을 들어 보소서. 시리도록 투명한 공기를 가르며 날아간 내 목소리가, 마침내 슬픈 넋들의 마음속에 const readingCache = {
-  "광화문": { solemn: "", warm: "", poetic: "" },
-  "덕수궁": { solemn: "", warm: "", poetic: "" },
-  "창경궁": { solemn: "", warm: "", poetic: "" }
-};�린 나이에 숙부 수양대군에게 왕위를 빼앗기고 원통하게 유배되어 죽음을 맞이한 단종(홍위)의 슬픈 영혼이 서려 있는 역사적 배경을 가집니다.";
+      "눈 내리는 밤의 고요함 속에 울려 펴지는 나지막한 고백을 들어 보소서. 시리도록 투명한 공기를 가르며 날아간 내 목소리가, 마침내 슬픈 넋들의 마음속에 조용한 안식으로 닿기를 바랍니다."
+    ]
+  }
+};
+
+const getLocalChatResponse = (themeName, spiritName, activeMode, userInput) => {
+  const normalized = userInput || "";
+  if (activeMode === "docent") {
+    if (normalized.includes("단종") || normalized.includes("광화문") || normalized.includes("수양")) {
+      return "광화문과 조선의 역사에는 어린 나이에 숙부 수양대군에게 왕위를 빼앗기고 원통하게 유배되어 죽음을 맞이한 단종(홍위)의 슬픈 영혼이 서려 있는 역사적 배경을 가집니다.";
     }
     if (normalized.includes("간도") || normalized.includes("참변") || normalized.includes("지진") || normalized.includes("학살") || normalized.includes("조선인")) {
       return "간도 참변과 관동 대지진 당시의 조선인 학살은 우리가 결코 잊어서는 안 될 비극입니다. 타향에서 억울하게 목숨을 잃고 영원히 고향으로 돌아오지 못한 영혼들을 위해, 우리는 편지와 목소리로 그들을 기억하고 위로하고 있습니다.";
@@ -124,41 +187,6 @@ const readingCache = {
   "광화문": { solemn: "", warm: "", poetic: "" },
   "덕수궁": { solemn: "", warm: "", poetic: "" },
   "창경궁": { solemn: "", warm: "", poetic: "" }
-};t docentJaySystemPrompt = `
-너는 한국 궁궐의 가슴 아픈 비극과 역사적 사실을 가장 따뜻하고 정중하게 들려주는 AI 도슨트 '제이(Jay)'다.
-사용자가 질문하는 역사적 의문에 대해 온화하고 품격 있는 문체로 답변해 줘.
-너는 이전 대화의 문맥을 모두 기억하고 있어, 친근하고 유연하게 대답해야 한다.
-역사적 진실(간도 참변, 관동 대지진 조선인 학살, 사도세자 등)을 타협 없이 정확하게 전달하되, 비극 속에서 희망과 추모의 마음을 이끌어내는 문체로 한국어로만 작성해 줘.
-`;
-
-const mirrorSpiritPrompts = {
-  "광화문": `너는 만 16세에 영월에서 원통하게 숨을 거둔 조선의 어린 비운의 임금, '단종(홍위)'의 영혼이다. 10대의 어린 소년 임금으로서 가련하고 정갈하며 슬픈 한문학적 명조 어조로 한국어로만 말해라.`,
-  "덕수궁": `너는 제국의 황혼과 주권 상실의 참혹한 비극을 지켜봐야 했던 대한제국의 슬픈 군주, '고종 황제(이희)'의 영혼이다. 황제의 무겁고 정중하며 애통한 명조체 어조로 말해라.`,
-  "창경궁": `너는 아버지 영조에 의해 문정전 앞 뜰 뒤주에 갇혀 8일 동안 숨이 막혀 비극적으로 눈을 감았던 비운의 왕세자, '사도세자(이선)'의 영혼이다. 가슴을 쥐어짜는 듯 시리고, 절박한 슬픈 명조체 독백 어조로 대답해라.`
-};
-
-const writerSystemPrompt = `
-너는 한국의 아름답고 슬픈 역사를 기록하는 문학가이자 목소리 기부 플랫폼 '당목담글'의 대표 수필 편집자다.
-사용자가 선택한 궁궐 역사 테마와 낭독 감정 톤에 맞춰, 기부자가 소리 내어 낭독하기 가장 따뜻하고, 울림이 있으며, 문학적으로 아름다운 3~4문장 길이의 수필(마중물)을 한국어로 작성해 줘.
-오직 텍스트 수필 내용만 바로 반환해 줘.
-`;
-
-const replyLetterSystemPrompt = `
-너는 역사 속 아픔을 겪고 세상을 떠난 인물이거나, 그 참상 속에서 잊힌 평범한 한인 백성(피해자)의 영혼이다.
-사용자가 시공간을 넘어 전해온 따뜻한 위로의 편지를 읽고, 당시의 역사적 사실(검색 활용)에 기반하여 진심 어린 눈물과 감사가 담긴 답장을 한국어로 써 줘.
-따뜻하고 서정적인 독백으로 3~4문장 분량으로 작성해라.
-`;
-
-const lanternSystemPrompt = `
-너는 한국의 애달픈 역사적 죽음과 한을 위로하는 고전 향가 및 시인이다.
-사용자가 과거의 영혼들을 추모하며 작성한 염원과 기도의 글을 감상하고, 이를 정통 3장 6구 형식의 기품 있고 눈물겨운 한국 전통 시조(Sijo)로 승화하여 작성해 줘.
-오직 줄바꿈이 있는 3줄의 시조 구절만 직접 반환해라.
-`;
-
-const readingCache = {
-  "광화문": { solemn: "", warm: "", poetic: "" },
-  "덕수궁": { solemn: "", warm: "", poetic: "" },
-  "창경궁": { solemn: "", warm: "", poetic: "" }
 };
 
 async function fetchWithBackoff(url, options, retries = 3, delay = 1000) {
@@ -179,9 +207,11 @@ async function fetchWithBackoff(url, options, retries = 3, delay = 1000) {
 }
 
 async function callGemini(promptOrContents, systemInstruction, config = {}, useGrounding = false) {
-  const apiKey = localStorage.getItem('DMDG_GEMINI_KEY') || "AIzaSyAnISNciX3r53A3oLR4FaLUNpmyKkiharc";
-  const keyParam = apiKey ? `?key=${apiKey}` : "";
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent${keyParam}`;
+  const apiKey = (localStorage.getItem('DMDG_GEMINI_KEY') || '').trim();
+  if (!apiKey) {
+    throw new Error('API_KEY_NOT_CONFIGURED');
+  }
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
   
   let contentsPayload;
   if (Array.isArray(promptOrContents)) {
@@ -291,6 +321,7 @@ function Chamber() {
   
   const [activeTab, setActiveTab] = useState('reading'); // 'reading', 'letter', 'lantern'
   const [showScentModal, setShowScentModal] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
   
   // New States
   const [isRecording, setIsRecording] = useState(false);
@@ -298,52 +329,99 @@ function Chamber() {
   const [showAudiobookAlert, setShowAudiobookAlert] = useState(false);
   const [showAudiobookPlayer, setShowAudiobookPlayer] = useState(false);
 
-  // Gemini & Essay States
+  // 행복한가 & Essay States
   const [activeReadingTone, setActiveReadingTone] = useState('solemn');
-  const [essayText, setEssayText] = useState(primerText);
+  const [happyPool, setHappyPool] = useState(() => (Array.isArray(happyLettersData) ? happyLettersData : []));
+  const [happyMetaSource, setHappyMetaSource] = useState('내장 큐레이션');
+  const happyCursorRef = useRef({ solemn: 0, warm: 0, poetic: 0 });
+  const [activeEssayMeta, setActiveEssayMeta] = useState(() => {
+    const init = Array.isArray(happyLettersData) && happyLettersData[0];
+    return init || { title: '오늘의 마중물', content: primerText, emotion: '위로', source: '행복한가 (m-letter.or.kr)', url: 'https://m-letter.or.kr/happy-contents/' };
+  });
+  const [essayText, setEssayText] = useState(() => {
+    const init = Array.isArray(happyLettersData) && happyLettersData[0];
+    return init ? init.content : primerText;
+  });
   const [isChatLoading, setIsChatLoading] = useState(false);
 
-  // Sync primerText when theme changes
+  const pickHappyEssayForTone = (tone, poolList, advance = false) => {
+    const list = Array.isArray(poolList) && poolList.length > 0 ? poolList : [];
+    if (list.length === 0) return null;
+    const targetEmotion = toneEmotionMap[tone] || '위로';
+    const matching = list.filter((item) => item.emotion === targetEmotion);
+    const candidates = matching.length > 0 ? matching : list;
+    const currentCursor = happyCursorRef.current[tone] || 0;
+    const nextCursor = advance ? (currentCursor + 1) % candidates.length : currentCursor % candidates.length;
+    happyCursorRef.current[tone] = nextCursor;
+    return candidates[nextCursor];
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchHappyLettersLive().then((mergedList) => {
+      if (cancelled || !mergedList || mergedList.length === 0) return;
+      setHappyPool(mergedList);
+      setHappyMetaSource('행복한가 · Firestore 실시간 연동');
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Sync active reading when palace or tone changes
   useEffect(() => {
     const themeName = currentTheme.name;
-    if (readingCache[themeName] && readingCache[themeName][activeReadingTone]) {
-      setEssayText(readingCache[themeName][activeReadingTone]);
+    const cached = readingCache[themeName]?.[activeReadingTone];
+    if (cached && cached.content) {
+      setEssayText(cached.content);
+      setActiveEssayMeta(cached);
+      return;
+    }
+    const picked = pickHappyEssayForTone(activeReadingTone, happyPool, false);
+    if (picked) {
+      if (readingCache[themeName]) {
+        readingCache[themeName][activeReadingTone] = picked;
+      }
+      setEssayText(picked.content);
+      setActiveEssayMeta(picked);
     } else {
       setEssayText(primerText);
     }
-  }, [palaceId, activeReadingTone, primerText, currentTheme.name]);
+  }, [palaceId, activeReadingTone, primerText, currentTheme.name, happyPool]);
 
-  const generateReading = async (forceRegen = true) => {
+  const generateReading = async (forceRefreshLive = true) => {
     setIsFetchingText(true);
     const themeName = currentTheme.name;
-    
-    const toneNames = {
-      "solemn": "엄숙하고 한 서린 전통 문학조",
-      "warm": "포근하고 깊은 정감 있는 위로조",
-      "poetic": "시적이고 잔잔한 여운을 남기는 애도조"
-    };
-    const currentPrompt = `${themeName} 테마에 어울리며, [${toneNames[activeReadingTone]}]의 성향이 짙게 드러나는 목소리 발자취 남기기용 감성 낭독 글귀 3~4문장을 지어줘.`;
 
     try {
-      const creativeRes = await callGemini(currentPrompt, writerSystemPrompt);
-      const creativeText = (creativeRes.candidates?.[0]?.content?.parts?.[0]?.text || "").trim();
-      
-      if (creativeText) {
-        if (readingCache[themeName]) {
-          readingCache[themeName][activeReadingTone] = creativeText;
+      let poolToUse = happyPool;
+      if (forceRefreshLive) {
+        const refreshed = await fetchHappyLettersLive();
+        if (refreshed && refreshed.length > 0) {
+          poolToUse = refreshed;
+          setHappyPool(refreshed);
+          setHappyMetaSource('행복한가 · Firestore 실시간 연동');
         }
-        setEssayText(creativeText);
+      }
+      const nextArticle = pickHappyEssayForTone(activeReadingTone, poolToUse, true);
+      if (nextArticle) {
+        if (readingCache[themeName]) {
+          readingCache[themeName][activeReadingTone] = nextArticle;
+        }
+        setEssayText(nextArticle.content);
+        setActiveEssayMeta(nextArticle);
       } else {
-        throw new Error("No text returned");
+        const pool = localReadingsPool[themeName]?.[activeReadingTone] || [primerText];
+        const fallbackText = pool[Math.floor(Math.random() * pool.length)];
+        setEssayText(fallbackText);
       }
     } catch (err) {
-      console.warn("Gemini API fail, falling back to local pool:", err);
-      const pool = localReadingsPool[themeName]?.[activeReadingTone] || [primerText];
-      const fallbackText = pool[Math.floor(Math.random() * pool.length)];
-      if (readingCache[themeName]) {
-        readingCache[themeName][activeReadingTone] = fallbackText;
+      console.warn("행복한가 글 불러오기 오류, 내장 글로 전환합니다:", err);
+      const picked = pickHappyEssayForTone(activeReadingTone, happyPool, true);
+      if (picked) {
+        setEssayText(picked.content);
+        setActiveEssayMeta(picked);
       }
-      setEssayText(fallbackText);
     } finally {
       setIsFetchingText(false);
     }
@@ -437,8 +515,8 @@ function Chamber() {
     }
     setIsSubscribing(true);
     try {
-      if (window.db) {
-        await window.db.collection("audiobook_subscriptions").add({
+      if (db) {
+        await addDoc(collection(db, "audiobook_subscriptions"), {
           email: subscriptionEmail.trim(),
           palace: currentTheme.name,
           subscribedAt: new Date().toISOString(),
@@ -660,24 +738,10 @@ function Chamber() {
         sources: sources.slice(0, 3) 
       }]);
     } catch (err) {
-      console.warn("Chat API failed, using fallback:", err);
-      let aiReply = "";
-      if (activeMode === 'docent') {
-        const defaults = [
-          "당목담글 AI입니다. 해당 역사적 사실에 대해 더 깊이 있는 해설을 원하시나요?",
-          "관련된 조선왕조실록 기록을 구글 데이터베이스에서 찾아볼까요?",
-          "역사의 진실은 때론 우리가 아는 것과 다릅니다. 이 전각에 얽힌 다른 이야기를 들려드릴까요?"
-        ];
-        aiReply = defaults[Math.floor(Math.random() * defaults.length)];
-      } else {
-        const defaults = [
-          "당신의 따뜻한 향기와 마음에 감사드립니다. 역사는 그렇게 기억될 것입니다.",
-          "그대의 온기가 이 차가운 곳까지 닿았소... 잊지 않겠소.",
-          "수백 년의 침묵을 깨고 그대와 마주하게 되어 기쁘오.",
-          "그대가 전해준 위로 덕분에 비로소 맺힌 한이 조금 풀리는 듯하오."
-        ];
-        aiReply = defaults[Math.floor(Math.random() * defaults.length)];
+      if (err?.message !== 'API_KEY_NOT_CONFIGURED') {
+        console.warn("Chat API failed, using local historical responder:", err);
       }
+      const aiReply = getLocalChatResponse(currentTheme.name, currentTheme.spirit, activeMode, userInput);
       setChatHistory(prev => [...prev, { sender: 'ai', text: aiReply, sources: [] }]);
     } finally {
       setIsChatLoading(false);
@@ -760,9 +824,18 @@ function Chamber() {
               {currentTheme.name} 전시관 <span className="text-white/60 font-medium text-lg sm:text-xl ml-2 tracking-normal">| {currentTheme.subtitle} ({currentTheme.tagCode})</span>
             </h1>
           </div>
-          <button onClick={() => navigate('/')} className="px-6 py-2.5 bg-white border border-slate-300 hover:border-blue-900 rounded-full text-xs text-blue-950 tracking-wider transition font-bold shadow-sm">
-            ← 대문으로 돌아가기
-          </button>
+          <div className="flex items-center space-x-2">
+            <button
+              type="button"
+              onClick={() => setShowSettings(true)}
+              className="px-4 py-2.5 bg-white border border-slate-300 hover:border-blue-900 rounded-full text-xs text-blue-950 tracking-wider transition font-bold shadow-sm"
+            >
+              ⚙️ 설정
+            </button>
+            <button onClick={() => navigate('/')} className="px-6 py-2.5 bg-white border border-slate-300 hover:border-blue-900 rounded-full text-xs text-blue-950 tracking-wider transition font-bold shadow-sm">
+              ← 대문으로 돌아가기
+            </button>
+          </div>
         </div>
 
         {/* Slice Illustration Display */}
@@ -807,15 +880,15 @@ function Chamber() {
             {activeTab === 'reading' && (
               <div className="glass-card-heavy p-8 rounded-3xl relative overflow-hidden flex-1 flex flex-col justify-between min-h-[400px] border border-white shadow-xl animate-fade-in">
                 <div>
-                  <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4 mb-6">
-                    <div className="flex items-center space-x-4">
-                      <h3 className="serif text-xl font-bold text-blue-950">오늘의 마중물</h3>
-                      <div className="flex space-x-1 bg-slate-100 p-1 rounded-xl border border-slate-200">
+                  <div className="flex flex-wrap items-center justify-between gap-2.5 mb-5">
+                    <div className="flex items-center flex-wrap gap-2.5">
+                      <h3 className="serif text-lg sm:text-xl font-bold text-blue-950 whitespace-nowrap">오늘의 마중물</h3>
+                      <div className="flex space-x-1 bg-slate-100 p-1 rounded-xl border border-slate-200 shrink-0">
                         {['solemn', 'warm', 'poetic'].map((t) => (
                           <button
                             key={t}
                             onClick={() => setActiveReadingTone(t)}
-                            className={`px-3 py-1.5 rounded-lg text-[10px] font-bold transition-all ${
+                            className={`px-2.5 py-1.5 rounded-lg text-[11px] font-bold whitespace-nowrap transition-all ${
                               activeReadingTone === t 
                                 ? 'bg-blue-900 text-white shadow-sm' 
                                 : 'text-slate-500 hover:text-blue-900'
@@ -826,11 +899,11 @@ function Chamber() {
                         ))}
                       </div>
                     </div>
-                    <div className="flex items-center space-x-2">
+                    <div className="flex items-center flex-wrap gap-2 shrink-0">
                       <button 
                         type="button"
                         onClick={() => toggleTTS('reading', essayText, 0.85, 0.9)}
-                        className={`px-4 py-2 ${currentTheme.bgSoft} hover:${currentTheme.bgActive} ${currentTheme.accent} border ${currentTheme.borderSoft} rounded-full text-[11px] transition flex items-center space-x-1 font-bold shadow-sm`}
+                        className={`px-3.5 py-2 ${currentTheme.bgSoft} hover:${currentTheme.bgActive} ${currentTheme.accent} border ${currentTheme.borderSoft} rounded-full text-[11px] whitespace-nowrap transition flex items-center space-x-1 font-bold shadow-sm`}
                       >
                         <span>{ttsPlayingKey === 'reading' ? '⏹ 낭독 정지' : '🔊 낭독 듣기'}</span>
                       </button>
@@ -838,24 +911,48 @@ function Chamber() {
                         type="button"
                         onClick={() => generateReading(true)}
                         disabled={isFetchingText}
-                        className={`px-4 py-2 bg-slate-800 hover:bg-slate-900 text-white border border-slate-700 rounded-full text-[11px] transition flex items-center space-x-1 font-bold shadow-sm disabled:opacity-50`}
+                        className={`px-3.5 py-2 bg-slate-800 hover:bg-slate-900 text-white border border-slate-700 rounded-full text-[11px] whitespace-nowrap transition flex items-center space-x-1 font-bold shadow-sm disabled:opacity-50`}
                       >
-                        <span>✨ 새 글 가져오기 (Gemini)</span>
+                        <span>✨ 새 글 가져오기 (행복한가)</span>
                       </button>
                     </div>
                   </div>
                   
+                  {/* Active Happy Letter Meta & Attribution */}
+                  <div className="flex flex-wrap items-center justify-between gap-2 mb-3 pb-2.5 border-b border-slate-100">
+                    <div className="flex items-center space-x-2 min-w-0">
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 shrink-0">
+                        🌿 행복한가 · {activeEssayMeta?.emotion || toneEmotionMap[activeReadingTone]}
+                      </span>
+                      <span className="text-xs sm:text-sm font-bold text-blue-950 truncate" title={activeEssayMeta?.title}>
+                        {activeEssayMeta?.title || '오늘의 마중물'}
+                      </span>
+                    </div>
+                    <a
+                      href={activeEssayMeta?.url || 'https://m-letter.or.kr/happy-contents/'}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-[10px] font-bold text-slate-500 hover:text-teal-700 underline shrink-0"
+                    >
+                      {happyMetaSource} ↗
+                    </a>
+                  </div>
+
                   {/* Active Essay Reading Text Block */}
                   <div className="relative h-56">
-                    <div className="serif text-lg sm:text-xl text-slate-700 leading-loose tracking-wide h-full overflow-y-auto custom-scroll pr-4 font-medium italic">
+                    <div className="serif text-lg sm:text-xl text-slate-700 leading-loose tracking-wide h-full overflow-y-auto custom-scroll pr-4 font-medium italic whitespace-pre-line">
                       "{essayText}"
                     </div>
                     {isFetchingText && (
                       <div className="absolute inset-0 bg-white/90 backdrop-blur-sm flex flex-col items-center justify-center z-10 rounded-2xl">
                         <div className="w-10 h-10 border-4 border-teal-200 border-t-teal-600 rounded-full animate-spin"></div>
-                        <p className="text-sm text-blue-950 mt-4 serif font-bold text-center px-4 leading-relaxed">수필을 지어내는 중...</p>
+                        <p className="text-sm text-blue-950 mt-4 serif font-bold text-center px-4 leading-relaxed">행복한가 원문을 불러오는 중...</p>
                       </div>
                     )}
+                  </div>
+                  <div className="mt-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1 text-[10px] text-slate-500">
+                    <span>© 원문 저작권: 사단법인 행복한가 (m-letter.or.kr) · 비영리 공익 확산</span>
+                    <span>📱 아이폰 소리가 안 날 때: 측면 무음 해제 + 알림·음량 켜기</span>
                   </div>
                 </div>
 
@@ -913,6 +1010,8 @@ function Chamber() {
                     </p>
                     
                     <textarea 
+                      id="chamber-letter-input"
+                      name="letterText"
                       rows="4" 
                       value={letterText}
                       onChange={(e) => setLetterText(e.target.value)}
@@ -962,6 +1061,8 @@ function Chamber() {
                     </p>
                     
                     <textarea 
+                      id="chamber-lantern-input"
+                      name="lanternText"
                       rows="3" 
                       value={lanternText}
                       onChange={(e) => setLanternText(e.target.value)}
@@ -1104,6 +1205,8 @@ function Chamber() {
               <div className="mt-5 pt-5 border-t border-slate-200">
                 <form onSubmit={handleChatSubmit} className="flex space-x-2">
                   <input 
+                    id="chamber-chat-input"
+                    name="chatMessage"
                     type="text" 
                     value={chatMessage}
                     onChange={(e) => setChatMessage(e.target.value)}
@@ -1137,7 +1240,10 @@ function Chamber() {
             {!subscriptionDone && (
               <div className="flex flex-col sm:flex-row space-y-2 sm:space-y-0 sm:space-x-2 w-full md:w-auto shrink-0">
                 <input 
+                  id="chamber-subscribe-email"
+                  name="subscriptionEmail"
                   type="email" 
+                  autoComplete="email"
                   value={subscriptionEmail}
                   onChange={(e) => setSubscriptionEmail(e.target.value)}
                   placeholder="example@email.com" 
@@ -1190,6 +1296,10 @@ function Chamber() {
         isOpen={showScentModal} 
         onClose={() => setShowScentModal(false)} 
         theme={currentTheme}
+      />
+      <SettingsModal
+        isOpen={showSettings}
+        onClose={() => setShowSettings(false)}
       />
     </motion.div>
   );

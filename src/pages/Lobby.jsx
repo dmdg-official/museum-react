@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import Chart from 'chart.js/auto';
+import SettingsModal from '../components/SettingsModal';
 
 const gates = [
   {
@@ -51,6 +52,7 @@ const gates = [
 function Lobby() {
   const [currentIndex, setCurrentIndex] = useState(0);
   const [opening, setOpening] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
   const navigate = useNavigate();
 
   const handleOpen = (id) => {
@@ -132,8 +134,9 @@ function Lobby() {
             ))}
           </div>
           <button 
-            onClick={() => alert('설정 기능은 다음 업데이트에 제공됩니다.')}
-            className="flex items-center space-x-1 sm:space-x-2 bg-white/20 hover:bg-white/30 px-3 sm:px-4 py-1.5 sm:py-2 rounded-full backdrop-blur-md transition text-xs sm:text-sm font-bold text-white shadow-lg border border-white/30"
+            type="button"
+            onClick={() => setShowSettings(true)}
+            className="flex items-center space-x-1 sm:space-x-2 bg-white/80 hover:bg-white px-3 sm:px-4 py-1.5 sm:py-2 rounded-full backdrop-blur-md transition text-xs sm:text-sm font-bold text-slate-700 shadow-sm border border-slate-200"
           >
             <span>⚙️</span> <span className="hidden md:inline">설정</span>
           </button>
@@ -230,6 +233,8 @@ function Lobby() {
           </div>
         </div>
       </footer>
+
+      <SettingsModal isOpen={showSettings} onClose={() => setShowSettings(false)} />
 
     </div>
   );
