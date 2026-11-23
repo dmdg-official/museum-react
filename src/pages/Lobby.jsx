@@ -3,6 +3,8 @@ import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import Chart from 'chart.js/auto';
 import SettingsModal from '../components/SettingsModal';
+import LanguageDropdown from '../components/LanguageDropdown';
+import { useLanguage } from '../contexts/LanguageContext';
 
 const gates = [
   {
@@ -50,6 +52,7 @@ const gates = [
 ];
 
 function Lobby() {
+  const { lang, t } = useLanguage();
   const [currentIndex, setCurrentIndex] = useState(0);
   const [opening, setOpening] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
@@ -66,6 +69,8 @@ function Lobby() {
   const prevGate = () => !opening && setCurrentIndex((prev) => (prev - 1 + gates.length) % gates.length);
 
   const currentGate = gates[currentIndex];
+  const currentGateTitle = t(`gate_${currentGate.id}_title`);
+  const currentGateDesc = t(`gate_${currentGate.id}_desc`);
   const chartRef = useRef(null);
   const chartInstance = useRef(null);
 
@@ -84,7 +89,7 @@ function Lobby() {
       chartInstance.current = new Chart(ctx, {
         type: 'radar',
         data: {
-          labels: ['엄숙함', '정통성', '서사성', '기록성', '기부 활성도'],
+          labels: t('radar_labels'),
           datasets: [{
             data: [95, 85, 70, 80, 90],
             backgroundColor: `${chartColors} 0.2)`,
@@ -113,15 +118,15 @@ function Lobby() {
     return () => {
       if (chartInstance.current) chartInstance.current.destroy();
     };
-  }, [currentIndex]);
+  }, [currentIndex, lang]);
 
   return (
     <div className="w-full h-[100dvh] relative overflow-hidden flex items-center justify-center bg-transparent">
       
       {/* Top Navigation */}
-      <nav className="fixed top-0 left-0 w-full z-50 p-6 flex justify-between items-center bg-gradient-to-b from-white/90 to-transparent">
-        <div className="serif text-2xl font-bold tracking-wider text-blue-950 drop-shadow-sm">The Gates</div>
-        <div className="flex items-center space-x-4">
+      <nav className="fixed top-0 left-0 w-full z-50 p-4 sm:p-6 flex justify-between items-center bg-gradient-to-b from-white/90 to-transparent">
+        <div className="serif text-2xl font-bold tracking-wider text-blue-950 drop-shadow-sm">{t('brand_title')}</div>
+        <div className="flex items-center space-x-2 sm:space-x-4">
           <div className="hidden sm:flex space-x-6 text-xs font-bold tracking-widest uppercase text-slate-500">
             {gates.map((g, idx) => (
               <button 
@@ -133,12 +138,13 @@ function Lobby() {
               </button>
             ))}
           </div>
+          <LanguageDropdown />
           <button 
             type="button"
             onClick={() => setShowSettings(true)}
             className="flex items-center space-x-1 sm:space-x-2 bg-white/80 hover:bg-white px-3 sm:px-4 py-1.5 sm:py-2 rounded-full backdrop-blur-md transition text-xs sm:text-sm font-bold text-slate-700 shadow-sm border border-slate-200"
           >
-            <span>⚙️</span> <span className="hidden md:inline">설정</span>
+            <span>⚙️</span> <span className="hidden md:inline">{t('settings_btn')}</span>
           </button>
         </div>
       </nav>
@@ -205,8 +211,8 @@ function Lobby() {
             <div className="ui-layer relative z-20 w-full p-8 text-center transition-all duration-700">
               <div className="glass-card p-6 rounded-3xl mt-12 mx-auto shadow-xl inline-block max-w-[90%]">
                 <span className={`${currentGate.tagClass} text-xs tracking-[0.3em] font-extrabold px-3 py-1 rounded-full`}>{currentGate.tag}</span>
-                <h2 className={`serif text-3xl sm:text-4xl mt-5 mb-2 font-bold ${currentGate.titleClass}`}>{currentGate.title}</h2>
-                <p className="text-slate-600 font-medium text-sm mb-6">{currentGate.desc}</p>
+                <h2 className={`serif text-3xl sm:text-4xl mt-5 mb-2 font-bold ${currentGate.titleClass}`}>{currentGateTitle}</h2>
+                <p className="text-slate-600 font-medium text-sm mb-6">{currentGateDesc}</p>
                 
                 <div className="relative w-full max-w-[450px] mx-auto h-[180px] sm:h-[260px] mb-6">
                   <canvas ref={chartRef}></canvas>
@@ -216,7 +222,7 @@ function Lobby() {
                   onClick={() => handleOpen(currentGate.id)}
                   className={`px-10 py-3.5 rounded-full text-sm font-bold tracking-widest uppercase transition-all ${currentGate.btnColor}`}
                 >
-                  문의 안쪽으로 입장하기
+                  {t('enter_gate')}
                 </button>
               </div>
             </div>
@@ -229,7 +235,7 @@ function Lobby() {
         <div className="pointer-events-auto glass-card px-4 py-2 rounded-full">
           <div className="flex items-center space-x-2">
             <span className="w-2 h-2 rounded-full bg-teal-500 animate-pulse"></span>
-            <span className="text-[10px] font-bold text-slate-700 tracking-widest uppercase">{currentGate.title.split(' ')[0]} 게이트 동기화 완료</span>
+            <span className="text-[10px] font-bold text-slate-700 tracking-widest uppercase">{currentGateTitle.split(' ')[0]} {t('gate_sync_suffix')}</span>
           </div>
         </div>
       </footer>

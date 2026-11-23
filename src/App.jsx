@@ -7,6 +7,7 @@ import MediaGallery from './pages/MediaGallery';
 import SplashIntro from './components/SplashIntro';
 
 import PaperCutBackground from './components/PaperCutBackground';
+import { LanguageProvider } from './contexts/LanguageContext';
 
 function App() {
   const [showIntro, setShowIntro] = useState(true);
@@ -20,19 +21,21 @@ function App() {
   }, []);
 
   return (
-    <div className="w-full min-h-screen relative text-slate-800">
-      <AnimatePresence>
-        {showIntro && <SplashIntro />}
-      </AnimatePresence>
+    <LanguageProvider>
+      <div className="w-full min-h-screen relative text-slate-800">
+        <AnimatePresence>
+          {showIntro && <SplashIntro />}
+        </AnimatePresence>
 
-      <PaperCutBackground />
-      
-      <Routes>
-        <Route path="/" element={<Lobby />} />
-        <Route path="/chamber/:palaceId" element={<Chamber />} />
-        <Route path="/gallery/:palaceId" element={<MediaGallery />} />
-      </Routes>
-    </div>
+        <PaperCutBackground />
+        
+        <Routes>
+          <Route path="/" element={<Lobby />} />
+          <Route path="/chamber/:palaceId" element={<Chamber />} />
+          <Route path="/gallery/:palaceId" element={<MediaGallery />} />
+        </Routes>
+      </div>
+    </LanguageProvider>
   );
 }
 

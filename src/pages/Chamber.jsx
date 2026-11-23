@@ -4,6 +4,9 @@ import { motion, AnimatePresence } from 'framer-motion';
 import ScentCertificateModal from '../components/ScentCertificateModal';
 import AudiobookPlayerModal from '../components/AudiobookPlayerModal';
 import SettingsModal from '../components/SettingsModal';
+import LanguageDropdown from '../components/LanguageDropdown';
+import { useLanguage } from '../contexts/LanguageContext';
+import { palaceLocalizedInfo, multilingualReadings, getLocalizedChatFallback, localizedSijoFallback } from '../data/translations';
 import happyLettersData from '../data/happyLetters.json';
 import { db } from '../firebase';
 import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
@@ -251,7 +254,7 @@ async function callGemini(promptOrContents, systemInstruction, config = {}, useG
   }
 }
 
-const playTTS = (text, rate = 0.85, pitch = 0.9, onEndCallback = null) => {
+const playTTS = (text, rate = 0.85, pitch = 0.9, onEndCallback = null, ttsLang = 'ko-KR') => {
   if (!window.speechSynthesis) return;
   
   window.speechSynthesis.cancel();
@@ -259,7 +262,7 @@ const playTTS = (text, rate = 0.85, pitch = 0.9, onEndCallback = null) => {
   // Use a slight delay to ensure cancel finishes
   setTimeout(() => {
     window.currentUtterance = new SpeechSynthesisUtterance(text);
-    window.currentUtterance.lang = 'ko-KR';
+    window.currentUtterance.lang = ttsLang;
     window.currentUtterance.rate = rate;
     window.currentUtterance.pitch = pitch;
     if (onEndCallback) {
@@ -273,6 +276,8 @@ const playTTS = (text, rate = 0.85, pitch = 0.9, onEndCallback = null) => {
 function Chamber() {
   const { palaceId } = useParams();
   const navigate = useNavigate();
+  const { lang, currentLang, t } = useLanguage();
+  const safePalaceId = palaceId && ['gwanghwa', 'deoksu', 'changgyeong'].includes(palaceId) ? palaceId : 'gwanghwa';
 
   const themeMap = {
     gwanghwa: { 
@@ -310,8 +315,20 @@ function Chamber() {
     }
   };
 
-  const currentTheme = themeMap[palaceId] || themeMap['gwanghwa'];
-  const primerText = `비는 대지를 적시고, 내 목소리는 누군가의 마음에 가닿아 따뜻한 위로가 됩니다. ${currentTheme.name}의 깊은 전각에서 과거의 슬픔을 달래는 나만의 향기를 엮어냅니다.`;
+  const baseTheme = themeMap[safePalaceId] || themeMap['gwanghwa'];
+  const localizedPalace = palaceLocalizedInfo[lang]?.[safePalaceId] || palaceLocalizedInfo.ko[safePalaceId];
+  const currentTheme = {
+    ...baseTheme,
+    name: localizedPalace?.name || baseTheme.name,
+    subtitle: localizedPalace?.subtitle || baseTheme.subtitle,
+    spirit: localizedPalace?.spirit || baseTheme.spirit,
+    season: localizedPalace?.season || baseTheme.season,
+    koName: baseTheme.name,
+  };
+  const [activeReadingTone, setActiveReadingTone] = useState('solemn');
+  const primerText = lang === 'ko'
+    ? `비는 대지를 적시고, 내 목소리는 누군가의 마음에 가닿아 따뜻한 위로가 됩니다. ${currentTheme.name}의 깊은 전각에서 과거의 슬픔을 달래는 나만의 향기를 엮어냅니다.`
+    : (multilingualReadings[lang]?.[safePalaceId]?.[activeReadingTone] || multilingualReadings.en[safePalaceId].solemn);
 
   const [activeMode, setActiveMode] = useState('docent'); // 'docent' or 'mirror'
   const handleTabSwitch = (mode) => {
@@ -330,7 +347,6 @@ function Chamber() {
   const [showAudiobookPlayer, setShowAudiobookPlayer] = useState(false);
 
   // 행복한가 & Essay States
-  const [activeReadingTone, setActiveReadingTone] = useState('solemn');
   const [happyPool, setHappyPool] = useState(() => (Array.isArray(happyLettersData) ? happyLettersData : []));
   const [happyMetaSource, setHappyMetaSource] = useState('내장 큐레이션');
   const happyCursorRef = useRef({ solemn: 0, warm: 0, poetic: 0 });
@@ -368,9 +384,24 @@ function Chamber() {
     };
   }, []);
 
-  // Sync active reading when palace or tone changes
+  // Sync active reading when palace, tone, or language changes
   useEffect(() => {
-    const themeName = currentTheme.name;
+    if (lang !== 'ko') {
+      const localizedEssay = multilingualReadings[lang]?.[safePalaceId]?.[activeReadingTone]
+        || multilingualReadings.en[safePalaceId]?.[activeReadingTone]
+        || primerText;
+      setEssayText(localizedEssay);
+      setActiveEssayMeta({
+        title: `${currentTheme.name} · ${t(`tone_${activeReadingTone}`)}`,
+        content: localizedEssay,
+        emotion: t(`tone_${activeReadingTone}`),
+        source: 'Sodam Live Docent',
+        url: 'https://m-letter.or.kr/happy-contents/'
+      });
+      return;
+    }
+
+    const themeName = currentTheme.koName || currentTheme.name;
     const cached = readingCache[themeName]?.[activeReadingTone];
     if (cached && cached.content) {
       setEssayText(cached.content);
@@ -387,11 +418,27 @@ function Chamber() {
     } else {
       setEssayText(primerText);
     }
-  }, [palaceId, activeReadingTone, primerText, currentTheme.name, happyPool]);
+  }, [palaceId, safePalaceId, activeReadingTone, primerText, currentTheme.name, currentTheme.koName, happyPool, lang]);
 
   const generateReading = async (forceRefreshLive = true) => {
     setIsFetchingText(true);
-    const themeName = currentTheme.name;
+    const themeName = currentTheme.koName || currentTheme.name;
+
+    if (lang !== 'ko') {
+      const localizedEssay = multilingualReadings[lang]?.[safePalaceId]?.[activeReadingTone]
+        || multilingualReadings.en[safePalaceId]?.[activeReadingTone]
+        || primerText;
+      setEssayText(localizedEssay);
+      setActiveEssayMeta({
+        title: `${currentTheme.name} · ${t(`tone_${activeReadingTone}`)}`,
+        content: localizedEssay,
+        emotion: t(`tone_${activeReadingTone}`),
+        source: 'Sodam Live Docent',
+        url: 'https://m-letter.or.kr/happy-contents/'
+      });
+      setIsFetchingText(false);
+      return;
+    }
 
     try {
       let poolToUse = happyPool;
@@ -479,7 +526,7 @@ function Chamber() {
         window.speechSynthesis.cancel();
       }
       setTtsPlayingKey(key);
-      playTTS(text, rate, pitch, () => setTtsPlayingKey(null));
+      playTTS(text, rate, pitch, () => setTtsPlayingKey(null), currentLang.ttsLang);
     }
   };
   const [chatMessage, setChatMessage] = useState("");
@@ -553,14 +600,14 @@ function Chamber() {
     try {
       const creativeRes = await callGemini(
         `테마: ${currentTheme.name}. 추모 염원: "${textVal}"`, 
-        lanternSystemPrompt
+        `${lanternSystemPrompt}\nIMPORTANT: Respond strictly in ${currentLang.aiLangName}.`
       );
       const sijoText = creativeRes.candidates?.[0]?.content?.parts?.[0]?.text || "";
       if (sijoText) {
         const trimmedSijo = sijoText.trim();
         setSijoReply(trimmedSijo);
         setLanternText("");
-        addRecord('scent', `${currentTheme.name} 등불 추모 의례`, `추모의 염원: ${textVal.substring(0, 50)}... | 추모 시조: ${trimmedSijo.substring(0, 50)}...`);
+        addRecord('scent', `${currentTheme.name}`, `${textVal.substring(0, 50)}... | ${trimmedSijo.substring(0, 50)}...`);
       } else {
         throw new Error("No sijo text returned");
       }
@@ -571,10 +618,12 @@ function Chamber() {
         "덕수궁": "대한문 넓은 뜰에 가을바람 스러지고\n쓰러져간 무명 열사 눈물 흘려 젖어드네\n동포여 슬퍼 마소라 아침 해가 떠오르리",
         "창경궁": "하얀 눈 문정전에 고요히 쌓여갈 제\n뒤주 속 시린 한숨 눈물 되어 얼어붙네\n봄날의 따스한 빛이 그 넋 보듬어주리."
       };
-      const fallbackSijo = localSijo[currentTheme.name] || localSijo["광화문"];
+      const fallbackSijo = lang !== 'ko'
+        ? (localizedSijoFallback[lang]?.[safePalaceId] || localizedSijoFallback.en[safePalaceId])
+        : (localSijo[currentTheme.koName || currentTheme.name] || localSijo["광화문"]);
       setSijoReply(fallbackSijo);
       setLanternText("");
-      addRecord('scent', `${currentTheme.name} 등불 추모 의례`, `추모의 염원: ${textVal.substring(0, 50)}... | 추모 시조: ${fallbackSijo.substring(0, 50)}...`);
+      addRecord('scent', `${currentTheme.name}`, `${textVal.substring(0, 50)}... | ${fallbackSijo.substring(0, 50)}...`);
     } finally {
       setIsLanternSending(false);
       
@@ -663,7 +712,7 @@ function Chamber() {
     try {
       const creativeRes = await callGemini(
         `테마: ${currentTheme.name}. 편지 내용: "${userLetter}"`, 
-        replyLetterSystemPrompt, 
+        `${replyLetterSystemPrompt}\nIMPORTANT: Respond strictly in ${currentLang.aiLangName}.`, 
         {}, 
         true
       );
@@ -673,7 +722,7 @@ function Chamber() {
         setLetterReply(trimmedReply);
         setIsLetterSent(true);
         setLetterText("");
-        addRecord('letter', `${currentTheme.name} 시공의 우체통`, `보낸 위로: ${userLetter.substring(0, 50)}... | 답장: ${trimmedReply.substring(0, 50)}...`);
+        addRecord('letter', `${currentTheme.name}`, `${userLetter.substring(0, 50)}... | ${trimmedReply.substring(0, 50)}...`);
       } else {
         throw new Error("No reply text returned");
       }
@@ -684,11 +733,13 @@ function Chamber() {
         "덕수궁": `${currentTheme.spirit}의 영혼이 그대의 따뜻한 편지에 화답합니다.\n"시공간을 넘어 닿은 그대의 온기에 깊은 감사를 전하오. 잊혀지지 않음이 우리에겐 가장 큰 구원이오..."`,
         "창경궁": "숨 막히는 뒤주에서 한 오라기 빛을 기다릴 때, 나는 그저 한 줄기 바람에 목이 말랐었소. 귀하의 위로가 내 상처 입은 넋을 녹여 줍니다."
       };
-      const fallbackReply = localReplies[currentTheme.name] || localReplies["광화문"];
+      const fallbackReply = lang !== 'ko'
+        ? (getLocalizedChatFallback(lang, safePalaceId, 'mirror') || localReplies["광화문"])
+        : (localReplies[currentTheme.koName || currentTheme.name] || localReplies["광화문"]);
       setLetterReply(fallbackReply);
       setIsLetterSent(true);
       setLetterText("");
-      addRecord('letter', `${currentTheme.name} 시공의 우체통`, `보낸 위로: ${userLetter.substring(0, 50)}... | 답장: ${fallbackReply.substring(0, 50)}...`);
+      addRecord('letter', `${currentTheme.name}`, `${userLetter.substring(0, 50)}... | ${fallbackReply.substring(0, 50)}...`);
     } finally {
       setIsSending(false);
     }
@@ -712,9 +763,10 @@ function Chamber() {
         parts: [{ text: entry.text }]
       }));
 
-      const activeSystemPrompt = activeMode === 'docent' 
+      const baseSystemPrompt = activeMode === 'docent' 
         ? docentJaySystemPrompt 
-        : mirrorSpiritPrompts[currentTheme.name] || mirrorSpiritPrompts['광화문'];
+        : mirrorSpiritPrompts[currentTheme.koName || currentTheme.name] || mirrorSpiritPrompts['광화문'];
+      const activeSystemPrompt = `${baseSystemPrompt}\nIMPORTANT: Respond strictly in ${currentLang.aiLangName}.`;
 
       const rawResponse = await callGemini(chatContents, activeSystemPrompt, {}, true);
       const aiReply = rawResponse.candidates?.[0]?.content?.parts?.[0]?.text || "";
@@ -741,7 +793,9 @@ function Chamber() {
       if (err?.message !== 'API_KEY_NOT_CONFIGURED') {
         console.warn("Chat API failed, using local historical responder:", err);
       }
-      const aiReply = getLocalChatResponse(currentTheme.name, currentTheme.spirit, activeMode, userInput);
+      const aiReply = lang !== 'ko'
+        ? (getLocalizedChatFallback(lang, safePalaceId, activeMode) || getLocalChatResponse(currentTheme.koName || currentTheme.name, currentTheme.spirit, activeMode, userInput))
+        : getLocalChatResponse(currentTheme.koName || currentTheme.name, currentTheme.spirit, activeMode, userInput);
       setChatHistory(prev => [...prev, { sender: 'ai', text: aiReply, sources: [] }]);
     } finally {
       setIsChatLoading(false);
@@ -812,28 +866,29 @@ function Chamber() {
       <div className="max-w-7xl mx-auto flex flex-col min-h-full relative z-10 p-4 sm:p-8">
         
         {/* Chamber Topbar */}
-        <div className="flex justify-between items-center pb-6 border-b border-slate-200 mt-4">
+        <div className="flex flex-wrap justify-between items-center gap-3 pb-6 border-b border-slate-200 mt-4">
           <div 
             onClick={() => navigate('/gallery/' + palaceId)} 
             className="cursor-pointer group"
           >
             <span className={`text-xs uppercase tracking-widest font-extrabold transition mb-1 block group-hover:brightness-110 text-amber-500`}>
-              MEDIA ARCHIVE (영상실 입장)
+              {t('chamber_media_archive')}
             </span>
             <h1 className="serif text-3xl sm:text-4xl mt-1 font-bold text-white group-hover:text-slate-200 transition">
-              {currentTheme.name} 전시관 <span className="text-white/60 font-medium text-lg sm:text-xl ml-2 tracking-normal">| {currentTheme.subtitle} ({currentTheme.tagCode})</span>
+              {currentTheme.name} {t('chamber_hall_suffix')} <span className="text-white/60 font-medium text-lg sm:text-xl ml-2 tracking-normal">| {currentTheme.subtitle} ({currentTheme.tagCode})</span>
             </h1>
           </div>
-          <div className="flex items-center space-x-2">
+          <div className="flex items-center flex-wrap gap-2">
+            <LanguageDropdown />
             <button
               type="button"
               onClick={() => setShowSettings(true)}
               className="px-4 py-2.5 bg-white border border-slate-300 hover:border-blue-900 rounded-full text-xs text-blue-950 tracking-wider transition font-bold shadow-sm"
             >
-              ⚙️ 설정
+              ⚙️ {t('settings_btn')}
             </button>
-            <button onClick={() => navigate('/')} className="px-6 py-2.5 bg-white border border-slate-300 hover:border-blue-900 rounded-full text-xs text-blue-950 tracking-wider transition font-bold shadow-sm">
-              ← 대문으로 돌아가기
+            <button onClick={() => navigate('/')} className="px-5 py-2.5 bg-white border border-slate-300 hover:border-blue-900 rounded-full text-xs text-blue-950 tracking-wider transition font-bold shadow-sm">
+              {t('back_to_lobby')}
             </button>
           </div>
         </div>
@@ -852,7 +907,7 @@ function Chamber() {
           </div>
           <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
              <div className="px-6 py-3 bg-white/20 backdrop-blur-md rounded-full text-white font-bold text-sm shadow-xl flex items-center gap-2 border border-white/30">
-                <span className="text-xl">▶</span> {currentTheme.name} 유튜브 아카이브 입장
+                <span className="text-xl">▶</span> {currentTheme.name} {t('chamber_youtube_enter')}
              </div>
           </div>
         </div>
@@ -866,13 +921,13 @@ function Chamber() {
             {/* Mode Selector Tab */}
             <div className="flex space-x-2 bg-slate-100 p-1.5 rounded-2xl border border-slate-200 shadow-inner">
               <button onClick={() => setActiveTab('reading')} className={`flex-1 py-2.5 rounded-xl text-xs font-bold transition shadow-sm ${activeTab === 'reading' ? `bg-white ${currentTheme.accent} border border-slate-200` : 'text-slate-500 hover:text-blue-900'}`}>
-                📖 목소리 발자취 남기기
+                {t('tab_reading')}
               </button>
               <button onClick={() => setActiveTab('letter')} className={`flex-1 py-2.5 rounded-xl text-xs font-bold transition shadow-sm ${activeTab === 'letter' ? `bg-white ${currentTheme.accent} border border-slate-200` : 'text-slate-500 hover:text-blue-900'}`}>
-                ✉️ 시공의 우체통
+                {t('tab_letter')}
               </button>
               <button onClick={() => setActiveTab('lantern')} className={`flex-1 py-2.5 rounded-xl text-xs font-bold transition shadow-sm ${activeTab === 'lantern' ? `bg-white ${currentTheme.accent} border border-slate-200` : 'text-slate-500 hover:text-blue-900'}`}>
-                🌌 등불 추모 의례
+                {t('tab_lantern')}
               </button>
             </div>
 
@@ -882,19 +937,19 @@ function Chamber() {
                 <div>
                   <div className="flex flex-wrap items-center justify-between gap-2.5 mb-5">
                     <div className="flex items-center flex-wrap gap-2.5">
-                      <h3 className="serif text-lg sm:text-xl font-bold text-blue-950 whitespace-nowrap">오늘의 마중물</h3>
+                      <h3 className="serif text-lg sm:text-xl font-bold text-blue-950 whitespace-nowrap">{t('today_primer')}</h3>
                       <div className="flex space-x-1 bg-slate-100 p-1 rounded-xl border border-slate-200 shrink-0">
-                        {['solemn', 'warm', 'poetic'].map((t) => (
+                        {['solemn', 'warm', 'poetic'].map((tKey) => (
                           <button
-                            key={t}
-                            onClick={() => setActiveReadingTone(t)}
+                            key={tKey}
+                            onClick={() => setActiveReadingTone(tKey)}
                             className={`px-2.5 py-1.5 rounded-lg text-[11px] font-bold whitespace-nowrap transition-all ${
-                              activeReadingTone === t 
+                              activeReadingTone === tKey 
                                 ? 'bg-blue-900 text-white shadow-sm' 
                                 : 'text-slate-500 hover:text-blue-900'
                             }`}
                           >
-                            {t === 'solemn' ? '엄숙함' : t === 'warm' ? '따뜻함' : '시적임'}
+                            {t(`tone_${tKey}`)}
                           </button>
                         ))}
                       </div>
@@ -905,7 +960,7 @@ function Chamber() {
                         onClick={() => toggleTTS('reading', essayText, 0.85, 0.9)}
                         className={`px-3.5 py-2 ${currentTheme.bgSoft} hover:${currentTheme.bgActive} ${currentTheme.accent} border ${currentTheme.borderSoft} rounded-full text-[11px] whitespace-nowrap transition flex items-center space-x-1 font-bold shadow-sm`}
                       >
-                        <span>{ttsPlayingKey === 'reading' ? '⏹ 낭독 정지' : '🔊 낭독 듣기'}</span>
+                        <span>{ttsPlayingKey === 'reading' ? t('tts_stop') : t('tts_play')}</span>
                       </button>
                       <button 
                         type="button"
@@ -913,7 +968,7 @@ function Chamber() {
                         disabled={isFetchingText}
                         className={`px-3.5 py-2 bg-slate-800 hover:bg-slate-900 text-white border border-slate-700 rounded-full text-[11px] whitespace-nowrap transition flex items-center space-x-1 font-bold shadow-sm disabled:opacity-50`}
                       >
-                        <span>✨ 새 글 가져오기 (행복한가)</span>
+                        <span>{t('fetch_new_essay')}</span>
                       </button>
                     </div>
                   </div>
@@ -922,10 +977,10 @@ function Chamber() {
                   <div className="flex flex-wrap items-center justify-between gap-2 mb-3 pb-2.5 border-b border-slate-100">
                     <div className="flex items-center space-x-2 min-w-0">
                       <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 shrink-0">
-                        🌿 행복한가 · {activeEssayMeta?.emotion || toneEmotionMap[activeReadingTone]}
+                        🌿 {lang === 'ko' ? `행복한가 · ${activeEssayMeta?.emotion || toneEmotionMap[activeReadingTone]}` : `${currentTheme.name} · ${t(`tone_${activeReadingTone}`)}`}
                       </span>
                       <span className="text-xs sm:text-sm font-bold text-blue-950 truncate" title={activeEssayMeta?.title}>
-                        {activeEssayMeta?.title || '오늘의 마중물'}
+                        {activeEssayMeta?.title || t('today_primer')}
                       </span>
                     </div>
                     <a
@@ -946,13 +1001,13 @@ function Chamber() {
                     {isFetchingText && (
                       <div className="absolute inset-0 bg-white/90 backdrop-blur-sm flex flex-col items-center justify-center z-10 rounded-2xl">
                         <div className="w-10 h-10 border-4 border-teal-200 border-t-teal-600 rounded-full animate-spin"></div>
-                        <p className="text-sm text-blue-950 mt-4 serif font-bold text-center px-4 leading-relaxed">행복한가 원문을 불러오는 중...</p>
+                        <p className="text-sm text-blue-950 mt-4 serif font-bold text-center px-4 leading-relaxed">{t('fetching_essay')}</p>
                       </div>
                     )}
                   </div>
                   <div className="mt-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1 text-[10px] text-slate-500">
-                    <span>© 원문 저작권: 사단법인 행복한가 (m-letter.or.kr) · 비영리 공익 확산</span>
-                    <span>📱 아이폰 소리가 안 날 때: 측면 무음 해제 + 알림·음량 켜기</span>
+                    <span>{t('source_attribution')}</span>
+                    <span>{t('ios_sound_tip')}</span>
                   </div>
                 </div>
 
@@ -960,9 +1015,9 @@ function Chamber() {
                 <div className="mt-6 pt-6 border-t border-slate-200">
                   <div className="flex items-center justify-between">
                     <div>
-                      <h4 className="text-sm text-blue-950 font-bold">목소리 발자취 남기기</h4>
+                      <h4 className="text-sm text-blue-950 font-bold">{t('voice_footprint_title')}</h4>
                       <p className={`text-xs mt-1 font-medium ${isRecording ? 'text-red-500 animate-pulse' : 'text-slate-500'}`} style={isRecordingComplete && !isRecording ? { color: currentTheme.accentHex } : {}}>
-                        {isRecording ? `녹음 중... ${recordingProgress.toFixed(0)}%` : isRecordingComplete ? "조향(녹음) 완료 ✨" : "대기 중"}
+                        {isRecording ? `${t('status_recording')} ${recordingProgress.toFixed(0)}%` : isRecordingComplete ? t('status_done') : t('status_waiting')}
                       </p>
                     </div>
                     
@@ -983,7 +1038,7 @@ function Chamber() {
                           className="px-5 py-2.5 rounded-full border text-xs font-bold transition-all flex items-center animate-fade-in shadow-md bg-white hover:bg-slate-50"
                           style={{ borderColor: currentTheme.accentHex, color: currentTheme.accentHex }}
                         >
-                          조향 완료 ✨
+                          {t('scent_done_btn')}
                         </button>
                       )}
                     </div>
@@ -1004,9 +1059,9 @@ function Chamber() {
               <div className="glass-card-heavy p-8 rounded-3xl relative overflow-hidden flex-1 flex flex-col justify-between min-h-[400px] border border-white shadow-xl animate-fade-in">
                 <div className="flex-1 flex flex-col justify-between">
                   <div>
-                    <h3 className="serif text-xl font-bold text-blue-950 mb-3">시공의 우체통</h3>
+                    <h3 className="serif text-xl font-bold text-blue-950 mb-3">{t('mailbox_title')}</h3>
                     <p className="text-sm text-slate-600 leading-relaxed mb-5 font-medium">
-                      {currentTheme.spirit}에게 따뜻한 위로의 편지를 남겨 보세요. <b>Gemini가 그들의 화답 편지</b>를 적어내려 갑니다.
+                      {currentTheme.spirit}{t('mailbox_desc_prefix')} <b>{t('mailbox_desc_bold')}</b>{t('mailbox_desc_suffix')}
                     </p>
                     
                     <textarea 
@@ -1015,7 +1070,7 @@ function Chamber() {
                       rows="4" 
                       value={letterText}
                       onChange={(e) => setLetterText(e.target.value)}
-                      placeholder="예: 역사 속 아픔을 겪으신 영혼께 위로의 마음을 전합니다..." 
+                      placeholder={t('mailbox_placeholder')} 
                       className={`w-full p-4 bg-white border-2 border-slate-200 rounded-2xl text-sm text-slate-800 focus:outline-none focus:${currentTheme.borderSoft} custom-scroll resize-none mb-4 shadow-inner`}
                     ></textarea>
                     
@@ -1024,7 +1079,7 @@ function Chamber() {
                       disabled={isSending}
                       className="w-full py-3.5 bg-blue-900 hover:bg-blue-950 rounded-2xl text-sm text-white transition font-bold shadow-lg"
                     >
-                      {isSending ? "✨ 시공간 너머로 편지 보내는 중... ✨" : "✉️ 시공간 너머로 편지 보내기"}
+                      {isSending ? t('mailbox_sending') : t('mailbox_send_btn')}
                     </button>
                   </div>
 
@@ -1032,13 +1087,13 @@ function Chamber() {
                   {letterReply && (
                     <div className="mt-6 pt-6 border-t border-slate-200 animate-fade-in">
                       <div className="flex justify-between items-center mb-3">
-                        <h4 className={`serif text-sm font-bold ${currentTheme.accent}`}>{currentTheme.spirit}에게서 온 답장</h4>
+                        <h4 className={`serif text-sm font-bold ${currentTheme.accent}`}>{currentTheme.spirit} {t('mailbox_reply_from')}</h4>
                         <button 
                           type="button"
                           onClick={() => toggleTTS('letter', letterReply, 0.85, 0.8)}
                           className={`px-3 py-1.5 ${currentTheme.bgSoft} hover:${currentTheme.bgActive} ${currentTheme.accent} border ${currentTheme.borderSoft} rounded-full text-[10px] transition flex items-center space-x-1 font-bold`}
                         >
-                          <span>{ttsPlayingKey === 'letter' ? '⏹ 낭독 정지' : '🔊 목소리로 듣기'}</span>
+                          <span>{ttsPlayingKey === 'letter' ? t('tts_stop') : t('tts_listen_voice')}</span>
                         </button>
                       </div>
                       <div className="serif text-sm text-slate-700 leading-relaxed bg-slate-50 p-5 rounded-2xl border border-slate-200 max-h-32 overflow-y-auto custom-scroll font-medium">
@@ -1055,9 +1110,9 @@ function Chamber() {
               <div className="glass-card-heavy p-8 rounded-3xl relative overflow-hidden flex-1 flex flex-col justify-between min-h-[400px] border border-white shadow-xl animate-fade-in">
                 <div className="flex-1 flex flex-col justify-between">
                   <div>
-                    <h3 className="serif text-xl font-bold text-blue-950 mb-3">🌌 등불 추모 의례</h3>
+                    <h3 className="serif text-xl font-bold text-blue-950 mb-3">{t('lantern_title')}</h3>
                     <p className="text-sm text-slate-600 leading-relaxed mb-5 font-medium">
-                      역사 속 영혼들에게 전하는 애틋한 바람을 한 구절 적어 보세요. <b>Gemini가 이를 정통 한국 시조(Sijo)</b>로 승화하여 등불과 함께 올립니다.
+                      {t('lantern_desc')}
                     </p>
                     
                     <textarea 
@@ -1066,7 +1121,7 @@ function Chamber() {
                       rows="3" 
                       value={lanternText}
                       onChange={(e) => setLanternText(e.target.value)}
-                      placeholder="예: 차가운 역사 속에서 눈감은 영혼께 따뜻한 바람이 불기를 소망합니다..." 
+                      placeholder={t('lantern_placeholder')} 
                       className={`w-full p-4 bg-white border-2 border-slate-200 rounded-2xl text-sm text-slate-800 focus:outline-none focus:border-teal-500 custom-scroll resize-none mb-4 shadow-inner`}
                     ></textarea>
                     
@@ -1075,7 +1130,7 @@ function Chamber() {
                       disabled={isLanternSending}
                       className="w-full py-3.5 bg-teal-600 hover:bg-teal-700 rounded-2xl text-sm text-white transition font-bold shadow-lg"
                     >
-                      {isLanternSending ? "🌌 염원의 등불을 올리는 중..." : "🌌 추모 등불 밝히기"}
+                      {isLanternSending ? t('lantern_sending') : t('lantern_send_btn')}
                     </button>
                   </div>
 
@@ -1083,13 +1138,13 @@ function Chamber() {
                   {sijoReply && (
                     <div className="mt-6 pt-6 border-t border-slate-200 animate-fade-in">
                       <div className="flex justify-between items-center mb-3">
-                        <h4 className="serif text-sm font-bold text-teal-700">헌정 추모 시조</h4>
+                        <h4 className="serif text-sm font-bold text-teal-700">{t('lantern_sijo_title')}</h4>
                         <button 
                           type="button"
                           onClick={() => toggleTTS('sijo', sijoReply, 0.8, 1.1)}
                           className="px-3 py-1.5 bg-teal-50 hover:bg-teal-100 text-teal-700 border border-teal-200 rounded-full text-[10px] transition flex items-center space-x-1 font-bold"
                         >
-                          <span>{ttsPlayingKey === 'sijo' ? '⏹ 낭송 정지' : '🔊 시조 낭송 듣기'}</span>
+                          <span>{ttsPlayingKey === 'sijo' ? t('lantern_tts_stop') : t('lantern_tts_listen')}</span>
                         </button>
                       </div>
                       <div className="serif text-base text-center text-blue-950 leading-loose bg-white p-6 rounded-3xl border border-slate-200 shadow-inner max-h-40 overflow-y-auto custom-scroll tracking-wide font-bold">
@@ -1112,27 +1167,27 @@ function Chamber() {
                     onClick={() => handleTabSwitch('docent')} 
                     className={`flex-1 py-2 rounded-xl text-[11px] font-bold transition shadow-sm ${activeMode === 'docent' ? 'bg-white text-teal-700 border border-slate-200' : 'text-slate-500 hover:text-teal-700'}`}
                   >
-                    🧑‍🏫 당목담글 AI와 대화
+                    {t('mode_docent')}
                   </button>
                   <button 
                     onClick={() => handleTabSwitch('mirror')} 
                     className={`flex-1 py-2 rounded-xl text-[11px] font-bold transition shadow-sm ${activeMode === 'mirror' ? 'bg-white text-purple-700 border border-slate-200' : 'text-slate-500 hover:text-purple-700'}`}
                   >
-                    🔮 역사 속 영령의 거울
+                    {t('mode_mirror')}
                   </button>
                 </div>
 
                 <div className="flex items-center justify-between pb-5 border-b border-slate-200 mb-5">
                   <div className="flex items-center space-x-3">
                     <div className={`w-10 h-10 rounded-full ${activeMode === 'docent' ? 'bg-teal-500' : 'bg-purple-600'} flex items-center justify-center text-sm shadow-md font-bold text-white`}>
-                      {activeMode === 'docent' ? '당' : '영'}
+                      {activeMode === 'docent' ? 'AI' : '✦'}
                     </div>
                     <div>
                       <h4 className="text-sm font-bold text-blue-950">
-                        {activeMode === 'docent' ? "당목담글 AI" : `영령의 거울 (${currentTheme.spirit})`}
+                        {activeMode === 'docent' ? t('docent_name') : `${t('mirror_title')} (${currentTheme.spirit})`}
                       </h4>
                       <p className="text-[10px] text-slate-500 font-bold mt-0.5">
-                        {activeMode === 'docent' ? "역사와 마음을 지키는 가이드" : "시간을 뛰어넘은 영혼의 화답"}
+                        {activeMode === 'docent' ? t('docent_sub') : t('mirror_sub')}
                       </p>
                     </div>
                   </div>
@@ -1142,12 +1197,16 @@ function Chamber() {
                 <div className="h-[300px] overflow-y-auto custom-scroll space-y-5 pr-4 text-sm">
                   <div className="flex space-x-3">
                     <div className={`w-8 h-8 rounded-full ${activeMode === 'docent' ? 'bg-teal-600' : 'bg-purple-600'} flex items-center justify-center text-[11px] shrink-0 font-bold text-white shadow-sm`}>
-                      {activeMode === 'docent' ? '당' : '영'}
+                      {activeMode === 'docent' ? 'AI' : '✦'}
                     </div>
                     <div className="bg-slate-50 p-4 rounded-2xl rounded-tl-none border border-slate-200 max-w-[85%] text-slate-700 leading-relaxed text-sm serif font-medium shadow-sm">
                       {activeMode === 'docent' 
-                        ? `어서 오세요. 저는 '당목담글'의 수필 편집자이자 역사적 진실을 전하는 동행자, 당목담글 AI입니다. ${currentTheme.name}에 대해 질문을 던져주시면 따뜻하게 답해 드릴게요.`
-                        : `내 이름은 ${currentTheme.spirit}. 차가운 역사의 뒤안길에서 그대를 기다리고 있었소...`}
+                        ? (lang === 'ko'
+                            ? `어서 오세요. 저는 '당목담글'의 수필 편집자이자 역사적 진실을 전하는 동행자, 당목담글 AI입니다. ${currentTheme.name}에 대해 질문을 던져주시면 따뜻하게 답해 드릴게요.`
+                            : (getLocalizedChatFallback(lang, safePalaceId, 'docent') || ''))
+                        : (lang === 'ko'
+                            ? `내 이름은 ${currentTheme.spirit}. 차가운 역사의 뒤안길에서 그대를 기다리고 있었소...`
+                            : (getLocalizedChatFallback(lang, safePalaceId, 'mirror') || ''))}
                     </div>
                   </div>
                   
@@ -1165,7 +1224,7 @@ function Chamber() {
                         <p className="serif font-medium">{msg.text}</p>
                         {msg.sources && msg.sources.length > 0 && (
                           <div className="mt-3 pt-3 border-t border-slate-200 flex flex-wrap gap-2 items-center">
-                            <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider block mr-1">🔍 정보 출처:</span>
+                            <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider block mr-1">{t('chat_sources')}</span>
                             {msg.sources.map((src, idx) => (
                               <a 
                                 key={idx} 
@@ -1187,7 +1246,7 @@ function Chamber() {
                   {isChatLoading && (
                     <div className="flex space-x-3 animate-pulse">
                       <div className={`w-8 h-8 rounded-full ${activeMode === 'docent' ? 'bg-teal-600' : 'bg-purple-600'} flex items-center justify-center text-[11px] shrink-0 font-bold text-white shadow-sm`}>
-                        {activeMode === 'docent' ? '당' : '영'}
+                        {activeMode === 'docent' ? 'AI' : '✦'}
                       </div>
                       <div className="bg-slate-50 p-4 rounded-2xl rounded-tl-none border border-slate-200 max-w-[85%] text-slate-400 font-medium">
                         <div className="flex items-center space-x-1.5 py-1">
@@ -1210,11 +1269,11 @@ function Chamber() {
                     type="text" 
                     value={chatMessage}
                     onChange={(e) => setChatMessage(e.target.value)}
-                    placeholder={activeMode === 'docent' ? "당목담글 AI에게 질문해 보세요..." : "영령에게 말 걸기..."} 
+                    placeholder={activeMode === 'docent' ? t('chat_placeholder_docent') : t('chat_placeholder_mirror')} 
                     className={`flex-1 px-4 py-3.5 bg-white border-2 border-slate-200 rounded-2xl text-sm text-slate-800 focus:outline-none focus:${currentTheme.borderSoft} shadow-inner font-medium`}
                   />
                   <button type="submit" className={`px-6 py-3.5 ${activeMode === 'docent' ? 'bg-teal-600 hover:bg-teal-700' : 'bg-purple-600 hover:bg-purple-700'} rounded-2xl text-sm text-white transition font-bold shrink-0 shadow-md`}>
-                    보내기
+                    {t('chat_send')}
                   </button>
                 </form>
               </div>
@@ -1226,14 +1285,14 @@ function Chamber() {
         <div id="audiobook-section" className="glass-card-heavy p-8 rounded-3xl mt-8 border-2 bg-gradient-to-tr from-orange-50 to-white shadow-xl" style={{ borderColor: `rgba(${currentTheme.accentRgb}, 0.2)` }}>
           <div className="flex flex-col md:flex-row justify-between items-center gap-6">
             <div className="text-center md:text-left">
-              <h4 className={`serif text-xl font-bold mb-2 ${currentTheme.accent}`}>📬 나의 발자취를 한 편의 오디오북으로</h4>
+              <h4 className={`serif text-xl font-bold mb-2 ${currentTheme.accent}`}>{t('sub_title')}</h4>
               {subscriptionDone ? (
                 <p className="text-sm text-slate-600 font-medium leading-relaxed max-w-xl">
-                  ✨ 구독 신청이 완료되었습니다. 당신의 향기가 담긴 오디오북이 곧 도착합니다.
+                  {t('sub_done')}
                 </p>
               ) : (
                 <p className="text-sm text-slate-600 font-medium leading-relaxed max-w-xl">
-                  추후 채널 구독 시, 기기에 축적해둔 나만의 목소리 흔적 수필들을 <b>전용 헌정 오디오북(MP3)</b>으로 엮어 보내드립니다.
+                  {t('sub_desc')}
                 </p>
               )}
             </div>
@@ -1255,7 +1314,7 @@ function Chamber() {
                   className="px-6 py-3 rounded-2xl text-white text-sm font-bold transition shrink-0 shadow-md"
                   style={{ backgroundColor: currentTheme.accentHex }}
                 >
-                  {isSubscribing ? "신청 중..." : "신청하기"}
+                  {isSubscribing ? t('sub_btn_loading') : t('sub_btn')}
                 </button>
               </div>
             )}
@@ -1264,7 +1323,7 @@ function Chamber() {
 
         {/* Saved Records list */}
         <div className="glass-card-heavy p-8 rounded-3xl mt-8 border border-white shadow-xl mb-12">
-          <h3 className="serif text-xl font-bold text-blue-950 mb-5">📜 내 기기에 저장된 나의 흔적들</h3>
+          <h3 className="serif text-xl font-bold text-blue-950 mb-5">{t('records_title')}</h3>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-5 max-h-60 overflow-y-auto custom-scroll pr-2">
             {savedRecords.length > 0 ? (
               savedRecords.map((rec, idx) => (
@@ -1272,7 +1331,7 @@ function Chamber() {
                   <div>
                     <div className="flex items-center space-x-2 mb-2">
                       <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-orange-100 text-orange-700">
-                        {rec.type === 'voice' ? '🎙️ 목소리' : rec.type === 'scent' ? '🧪 조향' : '✉️ 편지'}
+                        {rec.type === 'voice' ? t('rec_voice') : rec.type === 'scent' ? t('rec_scent') : t('rec_letter')}
                       </span>
                       <span className="text-[10px] text-slate-400 font-medium">{new Date(rec.time).toLocaleTimeString()}</span>
                     </div>
@@ -1285,7 +1344,7 @@ function Chamber() {
                 </div>
               ))
             ) : (
-              <p className="text-sm text-slate-500 font-medium italic">오늘 남겨주신 소중한 흔적(조향, 편지, 추모)들이 여기에 보관됩니다. 먼저 목소리 녹음 등을 진행해 주세요. ✨</p>
+              <p className="text-sm text-slate-500 font-medium italic">{t('records_empty')}</p>
             )}
           </div>
         </div>
